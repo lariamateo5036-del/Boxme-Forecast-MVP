@@ -22,6 +22,7 @@ import {
   calculateCosts,
   routeAllOrders,
   allocateStaff,
+  allocateByPriority,
   PACKING_METHOD_EFFICIENCY,
   STAFF_COST_PER_HOUR,
   DEFAULT_PRODUCTIVITY
@@ -336,8 +337,32 @@ export async function workforceCalculateV2(
 
     // Optional: Add priority analysis
     if (priority_analysis) {
-      // TODO: Implement priority-based breakdown
-      result.breakdown_by_priority = [];
+      const priorityBreakdown = await allocateByPriority(
+        totalOrders,
+        totalHours,
+        totalStaffNeeded,
+        staffBreakdown
+      );
+      result.breakdown_by_priority = priorityBreakdown;
+      
+      // Update recommendations with priority insights
+      if (include_recommendations && priorityBreakdown.length > 0) {
+        const { generatePriorityRecommendations } = await import('./workforce-recommendations');
+        const priorityRecs = generatePriorityRecommendations(
+          priorityBreakdown.map(p => ({
+            priority: p.priority,
+            name: p.name,
+            orders: p.orders,
+            hours: p.hours,
+            staff_needed: p.staff_needed
+          }))
+        );
+        result.recommendations.push(...priorityRecs);
+        
+        // Re-sort by priority
+        const priorityOrder = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+        result.recommendations.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
+      }
     }
 
     return c.json(result);

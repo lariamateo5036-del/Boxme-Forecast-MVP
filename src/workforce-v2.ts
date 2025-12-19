@@ -446,14 +446,47 @@ export async function routeAllOrders(
     STANDARD: { orders: 0, hours: 0 }
   };
 
+  // Handle case with no customers - use default standard processing
+  if (customers.length === 0) {
+    const hours = calculateWorkHours(
+      totalOrders,
+      DEFAULT_PRODUCTIVITY.avg_processing_minutes,
+      PACKING_METHOD_EFFICIENCY.STANDARD
+    );
+    
+    return [
+      {
+        method: 'STANDARD',
+        orders: totalOrders,
+        hours: Math.round(hours * 100) / 100,
+        staff: calculateStaffNeeded(hours),
+        cost: 0,
+        percentage: 100
+      }
+    ];
+  }
+
   // Distribute orders across customers (simplified - equal distribution)
   const ordersPerCustomer = Math.floor(totalOrders / customers.length);
 
   for (const customer of customers) {
     let customerOrders = ordersPerCustomer;
 
+    // Fallback: If customer has no product mix, use default
+    let productMix = customer.product_mix;
+    if (productMix.length === 0) {
+      productMix = [
+        {
+          category_code: 'GENERAL',
+          category_name: 'General Products',
+          percentage: 100,
+          avg_processing_minutes: DEFAULT_PRODUCTIVITY.avg_processing_minutes
+        }
+      ];
+    }
+
     // Route by product mix
-    for (const product of customer.product_mix) {
+    for (const product of productMix) {
       const productOrders = Math.floor(customerOrders * (product.percentage / 100));
 
       // Determine routing
@@ -557,6 +590,112 @@ export function allocateStaff(
 }
 
 // ============================================
+// PRIORITY-BASED ALLOCATION
+// ============================================
+
+/**
+ * Allocate orders and staff by priority buckets (P1-P6)
+ */
+export async function allocateByPriority(
+  totalOrders: number,
+  totalHours: number,
+  totalStaff: number,
+  staffBreakdown: StaffBreakdown,
+  priorityDistribution?: Record<Priority, number> // Percentage by priority
+): Promise<PriorityBucket[]> {
+  // Default distribution if not provided (based on typical e-commerce)
+  const defaultDistribution: Record<Priority, number> = {
+    1: 10,  // P1 - Instant (Mall same-day < 4h) - 10%
+    2: 20,  // P2 - Same Day (6pm cutoff) - 20%
+    3: 35,  // P3 - Next Day - 35%
+    4: 20,  // P4 - Standard (2-3 days) - 20%
+    5: 10,  // P5 - Economy (3-5 days) - 10%
+    6: 5    // P6 - Delayed (can delay) - 5%
+  };
+
+  const distribution = priorityDistribution || defaultDistribution;
+
+  const priorityBuckets: PriorityBucket[] = [];
+
+  // Priority bucket definitions
+  const bucketDefinitions = [
+    { priority: 1 as Priority, name: 'P1 - Instant', description: 'Mall same-day < 4h', cutoff_time: '08:00' },
+    { priority: 2 as Priority, name: 'P2 - Same Day', description: 'Standard same-day', cutoff_time: '18:00' },
+    { priority: 3 as Priority, name: 'P3 - Next Day', description: 'Next-day delivery', cutoff_time: '21:00' },
+    { priority: 4 as Priority, name: 'P4 - Standard', description: '2-3 day delivery', cutoff_time: undefined },
+    { priority: 5 as Priority, name: 'P5 - Economy', description: '3-5 day delivery', cutoff_time: undefined },
+    { priority: 6 as Priority, name: 'P6 - Delayed', description: 'Can delay if needed', cutoff_time: undefined }
+  ];
+
+  let remainingBoxme = staffBreakdown.boxme.available;
+  let remainingVeteran = staffBreakdown.veteran.available;
+  let remainingSeasonal = staffBreakdown.seasonal.available;
+
+  for (const bucket of bucketDefinitions) {
+    const percentage = distribution[bucket.priority] || 0;
+    const orders = Math.floor(totalOrders * (percentage / 100));
+    const hours = Math.round((totalHours * (percentage / 100)) * 100) / 100;
+    const staffNeeded = calculateStaffNeeded(hours);
+
+    // Allocate staff by priority (higher priority gets better staff)
+    let allocatedBoxme = 0;
+    let allocatedVeteran = 0;
+    let allocatedSeasonal = 0;
+
+    if (bucket.priority <= 2) {
+      // P1-P2: Prioritize Boxme + Veterans
+      const targetBoxme = Math.ceil(staffNeeded * 0.6);
+      const targetVeteran = Math.ceil(staffNeeded * 0.3);
+      const targetSeasonal = Math.ceil(staffNeeded * 0.1);
+
+      allocatedBoxme = Math.min(targetBoxme, remainingBoxme);
+      allocatedVeteran = Math.min(targetVeteran, remainingVeteran);
+      allocatedSeasonal = Math.min(targetSeasonal, remainingSeasonal);
+    } else if (bucket.priority <= 4) {
+      // P3-P4: Balanced mix
+      const targetBoxme = Math.ceil(staffNeeded * 0.5);
+      const targetVeteran = Math.ceil(staffNeeded * 0.2);
+      const targetSeasonal = Math.ceil(staffNeeded * 0.3);
+
+      allocatedBoxme = Math.min(targetBoxme, remainingBoxme);
+      allocatedVeteran = Math.min(targetVeteran, remainingVeteran);
+      allocatedSeasonal = Math.min(targetSeasonal, remainingSeasonal);
+    } else {
+      // P5-P6: Seasonal + remaining staff
+      const targetBoxme = Math.ceil(staffNeeded * 0.3);
+      const targetVeteran = Math.ceil(staffNeeded * 0.1);
+      const targetSeasonal = Math.ceil(staffNeeded * 0.6);
+
+      allocatedBoxme = Math.min(targetBoxme, remainingBoxme);
+      allocatedVeteran = Math.min(targetVeteran, remainingVeteran);
+      allocatedSeasonal = Math.min(targetSeasonal, remainingSeasonal);
+    }
+
+    // Deduct allocated staff
+    remainingBoxme -= allocatedBoxme;
+    remainingVeteran -= allocatedVeteran;
+    remainingSeasonal -= allocatedSeasonal;
+
+    priorityBuckets.push({
+      priority: bucket.priority,
+      name: bucket.name,
+      description: bucket.description,
+      cutoff_time: bucket.cutoff_time,
+      orders,
+      hours,
+      staff_needed: staffNeeded,
+      staff_allocated: {
+        boxme: allocatedBoxme,
+        seasonal: allocatedSeasonal,
+        veteran: allocatedVeteran
+      }
+    });
+  }
+
+  return priorityBuckets;
+}
+
+// ============================================
 // EXPORT MODULE
 // ============================================
 
@@ -569,6 +708,7 @@ export default {
   routeOrders,
   routeAllOrders,
   allocateStaff,
+  allocateByPriority,
   formatVND,
   formatNumber
 };
