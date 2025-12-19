@@ -1,0 +1,7 @@
+# Generated files and dependencies
+.wrangler/
+node_modules/
+generated-data/
+generated-forecasts.sql
+generated-orders.sql
+core
