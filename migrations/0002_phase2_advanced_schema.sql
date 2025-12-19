@@ -134,9 +134,7 @@ CREATE TABLE IF NOT EXISTS platform_notes (
 
 -- Add new columns to orders_history (existing table)
 -- Note: SQLite doesn't support multiple ALTER TABLE in one statement
-
--- Customer dimension
-ALTER TABLE orders_history ADD COLUMN customer_id TEXT;
+-- Note: customer_id already exists in 0001_init_schema.sql, skipping
 
 -- Weight dimensions
 ALTER TABLE orders_history ADD COLUMN weight_kg REAL DEFAULT 0.5;
