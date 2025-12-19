@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serveStatic } from 'hono/cloudflare-workers';
+import workforceCalculateV2 from './api-workforce-v2';
 
 type Bindings = {
   DB: D1Database;
@@ -432,6 +433,9 @@ app.post('/api/workforce/calculate', async (c) => {
     return c.json({ error: 'Failed to calculate workforce' }, 500);
   }
 });
+
+// POST /api/workforce/calculate/v2 - Workforce Calculation v2.0 (Enhanced)
+app.post('/api/workforce/calculate/v2', workforceCalculateV2);
 
 // ============================================
 // CUSTOMER CONFIGURATION APIs

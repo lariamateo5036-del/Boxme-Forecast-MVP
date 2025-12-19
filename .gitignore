@@ -5,3 +5,4 @@ generated-data/
 generated-forecasts.sql
 generated-orders.sql
 core
+dist/
